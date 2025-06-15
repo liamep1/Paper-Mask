@@ -1,37 +1,68 @@
-// Legg til dette ØVERST i kode.js (før de eksisterende variablene)
 
-// Supabase konfigurasjon
-const SUPABASE_URL = 'https://rajqlpstkevirxyabejk.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJhanFscHN0a2V2aXJ4eWFiZWprIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkwMjYyMDIsImV4cCI6MjA2NDYwMjIwMn0.5rQIV1QnqIrURgnvf7CD2L5t3B_UHxKySJU-dw0ZJ9M';
-
-// Sjekk om Supabase er lastet
-let supabase = null;
-document.addEventListener('DOMContentLoaded', function() {
-    if (typeof window.supabase !== 'undefined') {
-        supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        console.log('✅ Supabase connected');
-        addMultiplayerButtons();
-    } else {
-        console.error('❌ Supabase not loaded');
-    }
-});
-
-// Globale variabler for multiplayer
-let currentGame = null;
-let currentPlayer = null;
-let gameSubscription = null;
-let playersSubscription = null;
-let onlinePlayers = [];
-
-// Generer spillkode
-function generateGameCode() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
+class MultiplayerManager {
+constructor(gameManager) {
+    this.gameManager = gameManager;
+    this.supabase = null;
+    this.currentGame = null;
+    this.currentPlayer = null;
+    this.gameSubscription = null;
+    this.playersSubscription = null;
+    this.onlinePlayers = [];
+    this.pollingInterval = null;
+    
+    this.initializeSupabase();
 }
 
-// Host et nytt spill
-async function hostGame() {
-    if (!supabase) {
-        alert('Feil: Kan ikke koble til server');
+async initializeSupabase() {
+    // Vent til Supabase er lastet
+    if (typeof window.supabase === 'undefined') {
+        setTimeout(() => this.initializeSupabase(), 500);
+        return;
+    }
+
+    try {
+        this.supabase = window.supabase.createClient(
+            SUPABASE_CONFIG.url,
+            SUPABASE_CONFIG.anonKey
+        );
+        console.log('✅ Supabase tilkoblet');
+        this.updateConnectionStatus('Tilkoblet', CONNECTION_STATUS.CONNECTED);
+    } catch (error) {
+        console.error('❌ Supabase tilkobling feilet:', error);
+        this.updateConnectionStatus('Tilkoblingsfeil', CONNECTION_STATUS.ERROR);
+        // Prøv igjen om 5 sekunder
+        setTimeout(() => this.initializeSupabase(), 5000);
+    }
+}
+
+updateConnectionStatus(message, status) {
+    const indicator = document.getElementById('connection-indicator');
+    if (indicator) {
+        const statusIcons = {
+            [CONNECTION_STATUS.CONNECTED]: '🟢',
+            [CONNECTION_STATUS.CONNECTING]: '🟡',
+            [CONNECTION_STATUS.DISCONNECTED]: '🔴',
+            [CONNECTION_STATUS.ERROR]: '🔴'
+        };
+        
+        indicator.textContent = `${statusIcons[status]} ${message}`;
+        indicator.style.color = status === CONNECTION_STATUS.CONNECTED ? '#4CAF50' : '#ff4757';
+    }
+}
+
+generateGameCode() {
+    let result = '';
+    for (let i = 0; i < GAME_CONFIG.GAME_CODE_LENGTH; i++) {
+        result += GAME_CONFIG.GAME_CODE_CHARS.charAt(
+            Math.floor(Math.random() * GAME_CONFIG.GAME_CODE_CHARS.length)
+        );
+    }
+    return result;
+}
+
+async hostGame() {
+    if (!this.supabase) {
+        this.gameManager.showNotification('❌ Ingen tilkobling til server. Prøv igjen.', NOTIFICATION_TYPES.ERROR);
         return;
     }
 
@@ -39,15 +70,17 @@ async function hostGame() {
         const playerName = prompt("Skriv inn ditt navn:");
         if (!playerName?.trim()) return;
 
-        const gameCode = generateGameCode();
+        this.updateConnectionStatus('Oppretter spill...', CONNECTION_STATUS.CONNECTING);
+        const gameCode = this.generateGameCode();
         
-        // Opprett spill
-        const { data: gameData, error: gameError } = await supabase
+        // Opprett spill i database
+        const { data: gameData, error: gameError } = await this.supabase
             .from('games')
             .insert([{
                 code: gameCode,
-                status: 'waiting',
-                settings: getGameSettings()
+                status: GAME_STATUS.WAITING,
+                settings: this.gameManager.settings,
+                created_at: new Date().toISOString()
             }])
             .select()
             .single();
@@ -55,752 +88,1364 @@ async function hostGame() {
         if (gameError) throw gameError;
 
         // Legg til host som spiller
-        const { data: playerData, error: playerError } = await supabase
+        const { data: playerData, error: playerError } = await this.supabase
             .from('players')
             .insert([{
                 game_id: gameData.id,
                 name: playerName.trim(),
-                is_host: true
+                is_host: true,
+                joined_at: new Date().toISOString()
             }])
             .select()
             .single();
 
         if (playerError) throw playerError;
 
-        currentGame = gameData;
-        currentPlayer = playerData;
+        this.currentGame = gameData;
+        this.currentPlayer = playerData;
+        this.gameManager.isMultiplayerMode = true;
+        this.gameManager.gameMode = 'online';
 
         // Start real-time subscriptions
-        setupGameSubscriptions();
+        this.setupGameSubscriptions();
 
         // Vis spillkode til host
-        alert(`Spillkode: ${gameCode}\nDel denne koden med andre spillere!`);
+        this.gameManager.showNotification(`🎮 Spill opprettet! Spillkode: ${gameCode}`, NOTIFICATION_TYPES.SUCCESS);
         
         // Gå til lobby
-        showGameLobby();
+        this.showGameLobby();
+        this.updateConnectionStatus(`Host - ${gameCode}`, CONNECTION_STATUS.CONNECTED);
 
     } catch (error) {
         console.error('Feil ved hosting:', error);
-        alert(`Kunne ikke starte spill: ${error.message}`);
+        this.gameManager.showNotification(`❌ Kunne ikke starte spill: ${error.message}`, NOTIFICATION_TYPES.ERROR);
+        this.updateConnectionStatus('Feil ved oppretting', CONNECTION_STATUS.ERROR);
     }
 }
 
-// Bli med i spill
-async function joinGame() {
-    if (!supabase) {
-        alert('Feil: Kan ikke koble til server');
+async joinGame() {
+    if (!this.supabase) {
+        this.gameManager.showNotification('❌ Ingen tilkobling til server. Prøv igjen.', NOTIFICATION_TYPES.ERROR);
         return;
     }
 
     try {
-        const gameCode = prompt("Skriv inn spillkode:");
+        const gameCode = prompt("Skriv inn spillkode (6 bokstaver/tall):");
         if (!gameCode?.trim()) return;
 
         const playerName = prompt("Skriv inn ditt navn:");
         if (!playerName?.trim()) return;
 
+        this.updateConnectionStatus('Blir med i spill...', CONNECTION_STATUS.CONNECTING);
+
         // Finn spillet
-        const { data: gameData, error: gameError } = await supabase
+        const { data: gameData, error: gameError } = await this.supabase
             .from('games')
             .select('*')
             .eq('code', gameCode.toUpperCase().trim())
-            .eq('status', 'waiting')
+            .eq('status', GAME_STATUS.WAITING)
             .single();
 
         if (gameError || !gameData) {
-            alert('Spillkode ikke funnet eller spillet har startet');
+            this.gameManager.showNotification('❌ Spillkode ikke funnet eller spillet har startet', NOTIFICATION_TYPES.ERROR);
+            this.updateConnectionStatus('Feil spillkode', CONNECTION_STATUS.ERROR);
             return;
         }
 
         // Sjekk om navnet allerede er tatt
-        const { data: existingPlayer } = await supabase
+        const { data: existingPlayer } = await this.supabase
             .from('players')
             .select('name')
             .eq('game_id', gameData.id)
             .eq('name', playerName.trim());
 
         if (existingPlayer && existingPlayer.length > 0) {
-            alert('Dette navnet er allerede tatt');
+            this.gameManager.showNotification('❌ Dette navnet er allerede tatt', NOTIFICATION_TYPES.ERROR);
+            return;
+        }
+
+        // Sjekk spillergrense
+        const { data: allPlayers } = await this.supabase
+            .from('players')
+            .select('id')
+            .eq('game_id', gameData.id);
+
+        if (allPlayers && allPlayers.length >= GAME_CONFIG.MAX_PLAYERS_ONLINE) {
+            this.gameManager.showNotification(`❌ Spillet er fullt (${GAME_CONFIG.MAX_PLAYERS_ONLINE} spillere)`, NOTIFICATION_TYPES.ERROR);
             return;
         }
 
         // Legg til spiller
-        const { data: playerData, error: playerError } = await supabase
+        const { data: playerData, error: playerError } = await this.supabase
             .from('players')
             .insert([{
                 game_id: gameData.id,
                 name: playerName.trim(),
-                is_host: false
+                is_host: false,
+                joined_at: new Date().toISOString()
             }])
             .select()
             .single();
 
         if (playerError) throw playerError;
 
-        currentGame = gameData;
-        currentPlayer = playerData;
+        this.currentGame = gameData;
+        this.currentPlayer = playerData;
+        this.gameManager.isMultiplayerMode = true;
+        this.gameManager.gameMode = 'online';
 
         // Start real-time subscriptions
-        setupGameSubscriptions();
+        this.setupGameSubscriptions();
 
         // Gå til lobby
-        showGameLobby();
+        this.showGameLobby();
+        this.updateConnectionStatus(`Spiller - ${gameCode}`, CONNECTION_STATUS.CONNECTED);
+        this.gameManager.showNotification(`🎉 Velkommen til spillet!`, NOTIFICATION_TYPES.SUCCESS);
 
     } catch (error) {
         console.error('Feil ved joining:', error);
-        alert(`Kunne ikke bli med i spill: ${error.message}`);
+        this.gameManager.showNotification(`❌ Kunne ikke bli med i spill: ${error.message}`, NOTIFICATION_TYPES.ERROR);
+        this.updateConnectionStatus('Tilkoblingsfeil', CONNECTION_STATUS.ERROR);
     }
 }
 
-// Erstatt setupGameSubscriptions() og legg til disse funksjonene i multiplayer.js
-
-// Forbedret real-time setup
-function setupGameSubscriptions() {
+setupGameSubscriptions() {
     console.log('🔄 Setter opp real-time subscriptions...');
     
-    // Stopp eksisterende subscriptions først
-    if (gameSubscription) gameSubscription.unsubscribe();
-    if (playersSubscription) playersSubscription.unsubscribe();
+    // Stopp eksisterende subscriptions
+    if (this.gameSubscription) {
+        this.gameSubscription.unsubscribe();
+        this.gameSubscription = null;
+    }
+    if (this.playersSubscription) {
+        this.playersSubscription.unsubscribe();
+        this.playersSubscription = null;
+    }
 
-    // Sett opp game subscription
-    gameSubscription = supabase
-        .channel(`game-${currentGame.id}`)
+    // Game subscription
+    this.gameSubscription = this.supabase
+        .channel(`game-${this.currentGame.id}`, {
+            config: {
+                broadcast: { self: true },
+                presence: { key: this.currentPlayer.id }
+            }
+        })
         .on('postgres_changes', {
             event: '*',
             schema: 'public',
             table: 'games',
-            filter: `id=eq.${currentGame.id}`
+            filter: `id=eq.${this.currentGame.id}`
         }, (payload) => {
             console.log('🎮 Game update:', payload);
-            handleGameUpdate(payload);
+            this.handleGameUpdate(payload);
         })
         .subscribe((status) => {
             console.log('🎮 Game subscription status:', status);
         });
 
-    // Sett opp players subscription
-    playersSubscription = supabase
-        .channel(`players-${currentGame.id}`)
+    // Players subscription - lytter på ALL endringer
+    this.playersSubscription = this.supabase
+        .channel(`players-${this.currentGame.id}`, {
+            config: {
+                broadcast: { self: true },
+                presence: { key: this.currentPlayer.id }
+            }
+        })
         .on('postgres_changes', {
-            event: '*',
+            event: 'INSERT',
             schema: 'public',
             table: 'players',
-            filter: `game_id=eq.${currentGame.id}`
+            filter: `game_id=eq.${this.currentGame.id}`
         }, (payload) => {
-            console.log('👥 Players update:', payload);
-            handlePlayersUpdate(payload);
+            console.log('👥 Player JOINED:', payload);
+            this.handlePlayerJoined(payload);
+        })
+        .on('postgres_changes', {
+            event: 'DELETE',
+            schema: 'public',
+            table: 'players',
+            filter: `game_id=eq.${this.currentGame.id}`
+        }, (payload) => {
+            console.log('👥 Player LEFT:', payload);
+            this.handlePlayerLeft(payload);
+        })
+        .on('postgres_changes', {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'players',
+            filter: `game_id=eq.${this.currentGame.id}`
+        }, (payload) => {
+            console.log('👥 Player UPDATED:', payload);
+            this.handlePlayerUpdated(payload);
         })
         .subscribe((status) => {
             console.log('👥 Players subscription status:', status);
+            
+            if (status === 'SUBSCRIBED') {
+                console.log('✅ Real-time subscriptions aktive');
+                this.gameManager.showNotification('🔄 Real-time tilkobling aktiv', NOTIFICATION_TYPES.SUCCESS);
+            } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+                console.warn('❌ Real-time tilkobling feilet, bruker kun polling');
+                this.gameManager.showNotification('⚠️ Bruker backup-synkronisering', NOTIFICATION_TYPES.WARNING);
+            }
         });
 
-    // Start polling som backup i tilfelle real-time feiler
-    startPolling();
+    // Start aggressiv polling som backup
+    this.startAggressivePolling();
 }
 
-// Polling som backup for real-time
-let pollingInterval = null;
-
-function startPolling() {
-    // Stopp eksisterende polling
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
+async handlePlayerJoined(payload) {
+    if (payload.new && payload.new.name !== this.currentPlayer.name) {
+        console.log('🎉 Ny spiller registrert:', payload.new.name);
+        this.showPlayerJoinedNotification(payload.new.name);
     }
-
-    // Poll hver 2. sekund som backup
-    pollingInterval = setInterval(async () => {
-        if (currentGame && document.getElementById('lobby-page')) {
-            await refreshPlayersList();
-        }
-    }, 2000);
-
-    console.log('🔄 Polling startet som backup');
+    await this.refreshPlayersList(true);
 }
 
-function stopPolling() {
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-        console.log('⏹️ Polling stoppet');
-    }
-}
-
-// Forbedret handlePlayersUpdate
-async function handlePlayersUpdate(payload) {
-    console.log('👥 Players update received:', payload.eventType, payload.new);
-    
-    // Alltid refresh spillerliste når det er endringer
-    if (document.getElementById('lobby-page')) {
-        await refreshPlayersList();
+async handlePlayerLeft(payload) {
+    if (payload.old && payload.old.name !== this.currentPlayer.name) {
+        console.log('👋 Spiller forlot:', payload.old.name);
+        this.showPlayerLeftNotification(payload.old.name);
         
-        // Vis notifikasjon hvis noen har joinet
-        if (payload.eventType === 'INSERT' && payload.new) {
-            showPlayerJoinedNotification(payload.new.name);
+        if (payload.old.is_host) {
+            this.handleHostLeft();
+        }
+    }
+    await this.refreshPlayersList(true);
+}
+
+async handlePlayerUpdated(payload) {
+    console.log('🔄 Spiller oppdatert:', payload.new?.name);
+    
+    // Sjekk om spilleren fikk tildelt en rolle (spillet startet)
+    if (payload.new && payload.new.id === this.currentPlayer.id && payload.new.role && !this.currentPlayer.role) {
+        console.log('🎭 Min rolle ble tildelt:', payload.new.role, payload.new.word);
+        this.currentPlayer.role = payload.new.role;
+        this.currentPlayer.word = payload.new.word;
+        
+        // Vis rolle til spilleren
+        this.showPlayerRole();
+    }
+    
+    await this.refreshPlayersList(true);
+}
+
+startAggressivePolling() {
+    // Stopp eksisterende polling
+    if (this.pollingInterval) {
+        clearInterval(this.pollingInterval);
+    }
+    if (this.fastPollingInterval) {
+        clearInterval(this.fastPollingInterval);
+    }
+
+    // Start rask polling hver sekund for lobby
+    this.fastPollingInterval = setInterval(async () => {
+        if (this.currentGame && 
+            document.getElementById('lobby-page') && 
+            !document.getElementById('lobby-page').classList.contains('hidden')) {
+            
+            await this.checkForPlayerChanges();
+        }
+    }, 1000); // Hver sekund
+
+    // Normal polling hver 3. sekund som backup
+    this.pollingInterval = setInterval(async () => {
+        if (this.currentGame) {
+            await this.refreshPlayersList();
+            
+            // Sjekk også om spilleren har fått en rolle
+            await this.checkForRoleAssignment();
+        }
+    }, 3000);
+
+    console.log('🔄 Aggressiv polling startet (1s + 3s backup)');
+}
+
+async checkForRoleAssignment() {
+    if (!this.currentPlayer || this.currentPlayer.role) {
+        return; // Allerede har rolle eller ingen spiller
+    }
+
+    try {
+        const { data: playerData, error } = await this.supabase
+            .from('players')
+            .select('role, word')
+            .eq('id', this.currentPlayer.id)
+            .single();
+
+        if (error) {
+            console.error('Feil ved sjekk av rolle:', error);
+            return;
+        }
+
+        if (playerData && playerData.role) {
+            console.log('🎭 Rolle oppdaget via polling:', playerData.role, playerData.word);
+            this.currentPlayer.role = playerData.role;
+            this.currentPlayer.word = playerData.word;
+            
+            // Vis rolle til spilleren
+            this.showPlayerRole();
+        }
+
+    } catch (error) {
+        console.error('Feil ved polling for roller:', error);
+    }
+}
+
+async checkForPlayerChanges() {
+    try {
+        const { data: currentPlayers, error } = await this.supabase
+            .from('players')
+            .select('id, name, is_host, joined_at')
+            .eq('game_id', this.currentGame.id)
+            .order('joined_at');
+
+        if (error) {
+            console.error('Polling feil:', error);
+            return;
+        }
+
+        // Sammenlign med cached liste
+        const currentIds = currentPlayers.map(p => p.id).sort();
+        const cachedIds = this.onlinePlayers.map(p => p.id).sort();
+
+        if (JSON.stringify(currentIds) !== JSON.stringify(cachedIds)) {
+            console.log('🔍 Polling oppdaget endring:', {
+                før: cachedIds.length,
+                nå: currentIds.length
+            });
+
+            // Finn spillere som forlot
+            const leftPlayers = this.onlinePlayers.filter(oldPlayer => 
+                !currentPlayers.find(newPlayer => newPlayer.id === oldPlayer.id)
+            );
+
+            // Finn nye spillere
+            const newPlayers = currentPlayers.filter(newPlayer => 
+                !this.onlinePlayers.find(oldPlayer => oldPlayer.id === newPlayer.id)
+            );
+
+            // Vis notifikasjoner
+            leftPlayers.forEach(player => {
+                if (player.name !== this.currentPlayer.name) {
+                    console.log('📤 Polling: Spiller forlot -', player.name);
+                    this.showPlayerLeftNotification(player.name);
+                }
+            });
+
+            newPlayers.forEach(player => {
+                if (player.name !== this.currentPlayer.name) {
+                    console.log('📥 Polling: Spiller ble med -', player.name);
+                    this.showPlayerJoinedNotification(player.name);
+                }
+            });
+
+            // Oppdater cache og UI
+            this.onlinePlayers = currentPlayers;
+            this.updatePlayersListUI(currentPlayers);
+        }
+
+    } catch (error) {
+        console.error('❌ Feil ved player change check:', error);
+    }
+}
+
+startPolling() {
+    if (this.pollingInterval) {
+        clearInterval(this.pollingInterval);
+    }
+
+    this.pollingInterval = setInterval(async () => {
+        if (this.currentGame && document.getElementById('lobby-page') && !document.getElementById('lobby-page').classList.contains('hidden')) {
+            await this.refreshPlayersList();
+        }
+    }, GAME_CONFIG.POLLING_INTERVAL);
+
+    console.log('🔄 Polling startet som backup (hver', GAME_CONFIG.POLLING_INTERVAL / 1000, 'sekund)');
+}
+
+stopPolling() {
+    if (this.pollingInterval) {
+        clearInterval(this.pollingInterval);
+        this.pollingInterval = null;
+    }
+    if (this.fastPollingInterval) {
+        clearInterval(this.fastPollingInterval);
+        this.fastPollingInterval = null;
+    }
+    console.log('⏹️ Alle polling stoppet');
+}
+
+handleGameUpdate(payload) {
+    if (payload.new) {
+        this.currentGame = payload.new;
+        
+        switch (this.currentGame.status) {
+            case GAME_STATUS.WAITING:
+                if (document.getElementById('lobby-page') && !document.getElementById('lobby-page').classList.contains('hidden')) {
+                    this.refreshPlayersList();
+                }
+                break;
+                case GAME_STATUS.REVEALING:
+                    console.log('🎮 Spillet startet - laster multiplayer spill');
+                    
+                    if (!this.currentPlayer.role) {
+                        console.log("Hhewuifnj")
+                        this.checkForRoleAssignment(); 
+                    } else {
+                        this.showPlayerRole(); 
+                    }
+                    break;
+                
+            case GAME_STATUS.DISCUSSION:
+                this.syncDiscussion();
+                break;
+            case GAME_STATUS.VOTING:
+                this.syncVoting();
+                break;
         }
     }
 }
 
-// Vis notifikasjon når noen joiner
-function showPlayerJoinedNotification(playerName) {
-    // Ikke vis notifikasjon for seg selv
-    if (playerName === currentPlayer.name) return;
-
-    // Opprett notifikasjon
-    const notification = document.createElement('div');
-    notification.className = 'player-joined-notification';
-    notification.innerHTML = `
-        <div class="notification-content">
-            <span class="notification-icon">👋</span>
-            <span class="notification-text">${playerName} ble med!</span>
-        </div>
-    `;
-
-    // Legg til CSS for notifikasjon
-    notification.style.cssText = `
-        position: fixed;
-        top: 80px;
-        right: 20px;
-        background: linear-gradient(135deg, #4CAF50, #45a049);
-        color: white;
-        padding: 1rem 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-        z-index: 1001;
-        animation: slideInRight 0.3s ease-out;
-        font-family: 'Poppins', sans-serif;
-        font-weight: 500;
-    `;
-
-    // Legg til keyframes hvis de ikke eksisterer
-    if (!document.querySelector('#notification-styles')) {
-        const style = document.createElement('style');
-        style.id = 'notification-styles';
-        style.textContent = `
-            @keyframes slideInRight {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes slideOutRight {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-            .notification-content {
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-            }
-            .notification-icon {
-                font-size: 1.2rem;
-            }
-        `;
-        document.head.appendChild(style);
-    }
-
-    document.body.appendChild(notification);
-
-    // Fjern etter 3 sekunder
-    setTimeout(() => {
-        notification.style.animation = 'slideOutRight 0.3s ease-in';
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.remove();
-            }
-        }, 300);
-    }, 3000);
+showPlayerJoinedNotification(playerName) {
+    this.gameManager.showNotification(`👋 ${playerName} ble med!`, NOTIFICATION_TYPES.SUCCESS);
 }
 
-// Forbedret refreshPlayersList med force refresh
-async function refreshPlayersList(forceRefresh = false) {
+showPlayerLeftNotification(playerName) {
+    // Ikke vis notifikasjon hvis det er deg selv som forlater
+    if (playerName === this.currentPlayer.name) return;
+    
+    this.gameManager.showNotification(`👋 ${playerName} forlot spillet`, NOTIFICATION_TYPES.WARNING);
+}
+
+handleHostLeft() {
+    // Hvis host forlot, finn ny host eller gi beskjed
+    this.gameManager.showNotification('👑 Host forlot spillet! Spillet kan bli ustabilt.', NOTIFICATION_TYPES.ERROR);
+    
+    // Du kan implementere automatisk host-overføring her
+    setTimeout(async () => {
+        await this.checkAndPromoteNewHost();
+    }, 1000);
+}
+
+async checkAndPromoteNewHost() {
     try {
-        const { data: playersList, error } = await supabase
+        // Hent alle gjenværende spillere
+        const { data: remainingPlayers, error } = await this.supabase
             .from('players')
             .select('*')
-            .eq('game_id', currentGame.id)
+            .eq('game_id', this.currentGame.id)
             .order('joined_at');
 
         if (error) throw error;
 
-        // Sjekk om listen faktisk har endret seg
-        const playersChanged = !onlinePlayers || 
-                              onlinePlayers.length !== playersList.length ||
-                              forceRefresh;
+        // Hvis ingen spillere igjen, ikke gjør noe
+        if (!remainingPlayers || remainingPlayers.length === 0) {
+            return;
+        }
+
+        // Sjekk om det fortsatt finnes en host
+        const currentHost = remainingPlayers.find(p => p.is_host);
+        if (currentHost) {
+            // Det finnes fortsatt en host, alt OK
+            return;
+        }
+
+        // Ingen host funnet, gjør den første spilleren til host
+        const newHost = remainingPlayers[0];
+        
+        const { error: updateError } = await this.supabase
+            .from('players')
+            .update({ is_host: true })
+            .eq('id', newHost.id);
+
+        if (updateError) throw updateError;
+
+        // Hvis den nye hosten er deg selv
+        if (newHost.id === this.currentPlayer.id) {
+            this.currentPlayer.is_host = true;
+            this.gameManager.showNotification('👑 Du er nå den nye hosten!', NOTIFICATION_TYPES.INFO);
+            
+            // Oppdater lobby UI for å vise host-kontroller
+            this.setupLobbyUI();
+        } else {
+            this.gameManager.showNotification(`👑 ${newHost.name} er nå den nye hosten`, NOTIFICATION_TYPES.INFO);
+        }
+
+        // Oppdater spillerliste
+        await this.refreshPlayersList(true);
+
+    } catch (error) {
+        console.error('Feil ved host-overføring:', error);
+    }
+}
+
+async refreshPlayersList(forceRefresh = false) {
+    try {
+        const { data: playersList, error } = await this.supabase
+            .from('players')
+            .select('*')
+            .eq('game_id', this.currentGame.id)
+            .order('joined_at');
+
+        if (error) throw error;
+
+        // Sammenlign med forrige liste for å oppdage endringer
+        const previousPlayerNames = this.onlinePlayers.map(p => p.name);
+        const currentPlayerNames = playersList.map(p => p.name);
+        
+        const playersChanged = !this.onlinePlayers || 
+                              this.onlinePlayers.length !== playersList.length ||
+                              forceRefresh ||
+                              JSON.stringify(previousPlayerNames.sort()) !== JSON.stringify(currentPlayerNames.sort());
 
         if (playersChanged) {
             console.log('👥 Spillerliste oppdatert:', playersList.map(p => p.name));
-            onlinePlayers = playersList;
-            updatePlayersListUI(playersList);
+            
+            // Sjekk om noen spillere forsvant (uten at det kom via real-time event)
+            if (this.onlinePlayers.length > 0 && !forceRefresh) {
+                const leftPlayers = this.onlinePlayers.filter(oldPlayer => 
+                    !playersList.find(newPlayer => newPlayer.id === oldPlayer.id)
+                );
+                
+                leftPlayers.forEach(leftPlayer => {
+                    if (leftPlayer.name !== this.currentPlayer.name) {
+                        console.log('👋 Spilleren forlot (oppdaget via polling):', leftPlayer.name);
+                        this.showPlayerLeftNotification(leftPlayer.name);
+                    }
+                });
+            }
+            
+            this.onlinePlayers = playersList;
+            this.updatePlayersListUI(playersList);
+            
+            // Sjekk om vi er alene igjen
+            if (playersList.length === 1 && playersList[0].id === this.currentPlayer.id) {
+                this.gameManager.showNotification('😔 Du er alene igjen i spillet', NOTIFICATION_TYPES.WARNING);
+            }
         }
         
     } catch (error) {
         console.error('❌ Feil ved henting av spillere:', error);
-    }
-}
-
-// Forbedret leaveGame med cleanup
-async function leaveGame() {
-    const confirmLeave = confirm('Er du sikker på at du vil forlate spillet?');
-    if (!confirmLeave) return;
-
-    try {
-        showConnectionStatus('Forlater spill...', true);
         
-        // Stopp polling
-        stopPolling();
-        
-        // Fjern subscriptions
-        if (gameSubscription) {
-            gameSubscription.unsubscribe();
-            gameSubscription = null;
-        }
-        if (playersSubscription) {
-            playersSubscription.unsubscribe();
-            playersSubscription = null;
-        }
-
-        // Slett spiller fra database
-        if (currentPlayer) {
-            await supabase
-                .from('players')
-                .delete()
-                .eq('id', currentPlayer.id);
-        }
-
-        // Reset variabler
-        currentGame = null;
-        currentPlayer = null;
-        onlinePlayers = [];
-        isMultiplayerMode = false;
-
-        // Fjern lobby-siden
-        const lobbyPage = document.getElementById('lobby-page');
-        if (lobbyPage) {
-            lobbyPage.remove();
-        }
-
-        // Fjern eventuelle notifikasjoner
-        document.querySelectorAll('.player-joined-notification').forEach(n => n.remove());
-
-        // Gå tilbake til hovedmeny
-        showPage('main-menu');
-        showConnectionStatus('Tilkoblet', true);
-
-    } catch (error) {
-        console.error('Feil ved forlating av spill:', error);
-        showPage('main-menu'); // Gå tilbake uansett
-        showConnectionStatus('Frakoblet', false);
-    }
-}
-
-// Legg til en manual refresh-knapp i lobby (valgfritt)
-function addRefreshButton() {
-    const lobbyControls = document.getElementById('lobby-controls');
-    if (lobbyControls && !document.getElementById('refresh-btn')) {
-        const refreshBtn = document.createElement('button');
-        refreshBtn.id = 'refresh-btn';
-        refreshBtn.className = 'game-btn secondary';
-        refreshBtn.style.marginLeft = '0.5rem';
-        refreshBtn.innerHTML = '🔄 Oppdater';
-        refreshBtn.onclick = () => refreshPlayersList(true);
-        
-        const leaveBtn = lobbyControls.querySelector('button[onclick="leaveGame()"]');
-        if (leaveBtn) {
-            lobbyControls.insertBefore(refreshBtn, leaveBtn);
+        // Hvis vi ikke kan hente spillerliste, kan det være at spillet er slettet
+        if (error.code === 'PGRST116' || error.message?.includes('No rows found')) {
+            this.gameManager.showNotification('❌ Spillet eksisterer ikke lenger', NOTIFICATION_TYPES.ERROR);
+            setTimeout(() => {
+                this.leaveGame();
+            }, 2000);
         }
     }
 }
 
-// Oppdater createLobbyPage for å inkludere refresh-knapp
-function createLobbyPage() {
-    const lobbyHTML = `
-        <div class="container" id="lobby-page">
-            <div class="header">
-                <h2>🎮 Spillelobby</h2>
-                <p>Spillkode: <strong id="lobby-game-code">${currentGame.code}</strong></p>
-                <p style="font-size: 0.9rem; opacity: 0.8;">Del denne koden med andre spillere</p>
-            </div>
-            
-            <div class="players-section">
-                <h3 id="player-count-header">👥 Spillere (0)</h3>
-                <div class="players-grid" id="lobby-players-list">
-                    <div class="lobby-waiting">Laster spillere...</div>
-                </div>
-            </div>
-            
-            <div class="game-controls" id="lobby-controls">
-                ${currentPlayer.is_host ? `
-                    <button class="game-btn primary" onclick="startMultiplayerGame()" id="start-mp-game-btn" disabled>
-                        Start Spill (min 3 spillere)
-                    </button>
-                ` : '<p class="lobby-waiting">⏳ Venter på at host starter spillet...</p>'}
-                <button class="game-btn secondary" onclick="refreshPlayersList(true)">🔄 Oppdater</button>
-                <button class="game-btn secondary" onclick="leaveGame()">Forlat Spill</button>
-            </div>
-        </div>
-    `;
-    
-    const div = document.createElement('div');
-    div.innerHTML = lobbyHTML;
-    return div.firstElementChild;
+showGameLobby() {
+    this.gameManager.showPage('lobby-page');
+    this.setupLobbyUI();
+    this.refreshPlayersList();
 }
-// Håndter spilloppdateringer
-function handleGameUpdate(payload) {
-    if (payload.new) {
-        currentGame = payload.new;
-        
-        switch (currentGame.status) {
-            case 'waiting':
-                if (document.getElementById('lobby-page')) {
-                    refreshPlayersList();
-                }
-                break;
-            case 'revealing':
-                // Gå til ord-revelering i multiplayer
-                loadMultiplayerGame();
-                break;
-            case 'discussion':
-                // Synkroniser diskusjon
-                syncDiscussion();
-                break;
-            case 'voting':
-                // Synkroniser avstemming
-                syncVoting();
-                break;
+
+setupLobbyUI() {
+    // Sett spillkode
+    const gameCodeElement = document.getElementById('lobby-game-code');
+    if (gameCodeElement) {
+        gameCodeElement.textContent = this.currentGame.code;
+    }
+
+    // Sett opp kontroller basert på host/participant
+    const controlsElement = document.getElementById('lobby-controls');
+    if (controlsElement) {
+        if (this.currentPlayer.is_host) {
+            controlsElement.innerHTML = `
+                <button class="game-btn primary" onclick="multiplayerManager.startMultiplayerGame()" id="start-mp-game-btn" disabled>
+                    Start Spill (min ${GAME_CONFIG.MIN_PLAYERS} spillere)
+                </button>
+                <button class="game-btn secondary" onclick="multiplayerManager.refreshPlayersList(true)">🔄 Oppdater</button>
+                <button class="game-btn secondary" onclick="multiplayerManager.leaveGame()">Forlat Spill</button>
+            `;
+        } else {
+            controlsElement.innerHTML = `
+                <p class="lobby-waiting">⏳ Venter på at host starter spillet...</p>
+                <button class="game-btn secondary" onclick="multiplayerManager.refreshPlayersList(true)">🔄 Oppdater</button>
+                <button class="game-btn secondary" onclick="multiplayerManager.leaveGame()">Forlat Spill</button>
+            `;
         }
     }
 }
 
-// Håndter spilleroppdateringer
-async function handlePlayersUpdate(payload) {
-    if (document.getElementById('lobby-page')) {
-        await refreshPlayersList();
-    }
-}
-
-// Oppdater spillerliste
-async function refreshPlayersList() {
-    try {
-        const { data: playersList, error } = await supabase
-            .from('players')
-            .select('*')
-            .eq('game_id', currentGame.id)
-            .order('joined_at');
-
-        if (error) throw error;
-
-        onlinePlayers = playersList;
-        updatePlayersListUI(playersList);
-        
-    } catch (error) {
-        console.error('Feil ved henting av spillere:', error);
-    }
-}
-
-// Vis spillelobby
-function showGameLobby() {
-    // Skjul andre sider
-    document.querySelectorAll('.container').forEach(el => el.classList.add('hidden'));
-    
-    // Opprett eller vis lobby
-    let lobbyPage = document.getElementById('lobby-page');
-    if (!lobbyPage) {
-        lobbyPage = createLobbyPage();
-        document.body.appendChild(lobbyPage);
-    }
-    
-    lobbyPage.classList.remove('hidden');
-    refreshPlayersList();
-}
-
-// Opprett lobby side
-function createLobbyPage() {
-    const lobbyHTML = `
-        <div class="container" id="lobby-page">
-            <div class="header">
-                <h2>🎮 Spillelobby</h2>
-                <p>Spillkode: <strong id="lobby-game-code">${currentGame.code}</strong></p>
-            </div>
-            
-            <div class="players-section">
-                <h3 id="player-count-header">👥 Spillere (0)</h3>
-                <div class="players-grid" id="lobby-players-list"></div>
-            </div>
-            
-            <div class="game-controls" id="lobby-controls">
-                ${currentPlayer.is_host ? `
-                    <button class="game-btn primary" onclick="startMultiplayerGame()" id="start-mp-game-btn" disabled>
-                        Start Spill (min 3 spillere)
-                    </button>
-                ` : '<p>Venter på at host starter spillet...</p>'}
-                <button class="game-btn secondary" onclick="leaveGame()">Forlat Spill</button>
-            </div>
-        </div>
-    `;
-    
-    const div = document.createElement('div');
-    div.innerHTML = lobbyHTML;
-    return div.firstElementChild;
-}
-
-// Oppdater spillerliste UI
-function updatePlayersListUI(playersList) {
+updatePlayersListUI(playersList) {
     const playersListElement = document.getElementById('lobby-players-list');
     const headerElement = document.getElementById('player-count-header');
     
     if (!playersListElement) return;
 
-    playersListElement.innerHTML = '';
-    
-    playersList.forEach(player => {
-        const playerCard = document.createElement('div');
-        playerCard.className = 'player-card';
-        playerCard.innerHTML = `
-            <div class="player-name">${player.name}</div>
-            ${player.is_host ? '<div class="host-badge">👑 Host</div>' : ''}
+    if (playersList.length === 0) {
+        playersListElement.innerHTML = '<div class="lobby-waiting">Ingen spillere ennå...</div>';
+        return;
+    }
+
+    playersListElement.innerHTML = playersList.map((player, index) => {
+        const isNew = index === playersList.length - 1 && playersList.length > 1;
+        return `
+            <div class="player-card ${isNew ? 'new-player' : ''}">
+                <div class="player-name">${player.name}</div>
+                ${player.is_host ? '<div class="host-badge">👑 Host</div>' : ''}
+            </div>
         `;
-        playersListElement.appendChild(playerCard);
-    });
+    }).join('');
 
     // Oppdater header
     if (headerElement) {
         headerElement.textContent = `👥 Spillere (${playersList.length})`;
     }
 
-    // Oppdater start-knapp
+    // Oppdater start-knapp for host
     const startBtn = document.getElementById('start-mp-game-btn');
     if (startBtn) {
-        startBtn.disabled = playersList.length < 3;
-        startBtn.textContent = `Start Spill (${playersList.length} spillere)`;
+        const canStart = playersList.length >= GAME_CONFIG.MIN_PLAYERS;
+        startBtn.disabled = !canStart;
+        
+        if (canStart) {
+            startBtn.textContent = `🚀 Start Spill (${playersList.length} spillere)`;
+        } else {
+            startBtn.textContent = `Start Spill (${playersList.length}/${GAME_CONFIG.MIN_PLAYERS} spillere)`;
+        }
     }
 }
 
-// Start multiplayer spill
-async function startMultiplayerGame() {
-    if (!currentPlayer.is_host) return;
+async startMultiplayerGame() {
+    if (!this.currentPlayer.is_host) return;
+    if (this.onlinePlayers.length < GAME_CONFIG.MIN_PLAYERS) {
+        this.gameManager.showNotification(`Minimum ${GAME_CONFIG.MIN_PLAYERS} spillere kreves!`, NOTIFICATION_TYPES.ERROR);
+        return;
+    }
 
     try {
-        // Oppdater spillstatus
-        const { error } = await supabase
+        this.updateConnectionStatus('Starter spill...', CONNECTION_STATUS.CONNECTING);
+        
+        // Tildel roller og oppdater spillstatus
+        await this.assignMultiplayerRoles();
+        
+        const { error } = await this.supabase
             .from('games')
-            .update({ status: 'revealing' })
-            .eq('id', currentGame.id);
+            .update({ 
+                status: GAME_STATUS.REVEALING,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', this.currentGame.id);
 
         if (error) throw error;
 
+        console.log('✅ Spill startet - venter på rolle-synkronisering');
+        // await this.loadMultiplayerGame(); 
+        console.log("jfweiofjwl")
     } catch (error) {
         console.error('Feil ved start av spill:', error);
-        alert('Kunne ikke starte spill. Prøv igjen.');
+        this.gameManager.showNotification('❌ Kunne ikke starte spill. Prøv igjen.', NOTIFICATION_TYPES.ERROR);
     }
 }
 
-// Last multiplayer spill når det starter
-async function loadMultiplayerGame() {
+async assignMultiplayerRoles() {
+    if (!this.currentPlayer.is_host) return;
+
+    console.log('🎲 Tildeler roller til', this.onlinePlayers.length, 'spillere');
+
+    // Velg ordpar
+    const wordPair = WORD_PAIRS[Math.floor(Math.random() * WORD_PAIRS.length)];
+    const normalWord = wordPair.normal;
+    const undercoverWord = wordPair.undercover;
+
+    const undercoverCount = this.currentGame.settings?.undercoverCount || 1;
+    const mrWhiteEnabled = this.currentGame.settings?.enableMrWhite !== false;
+
+    const shuffledPlayers = [...this.onlinePlayers].sort(() => Math.random() - 0.5);
+    let roleIndex = 0;
+
+    console.log('📝 Ordpar:', normalWord, 'vs', undercoverWord);
+    console.log('🕵️ Undercover:', undercoverCount, '| Mr. White:', mrWhiteEnabled);
+
+    // Tildel roller
+    for (const player of shuffledPlayers) {
+        let role = PLAYER_ROLES.NORMAL;
+        let word = normalWord;
+
+        if (mrWhiteEnabled && roleIndex === 0) {
+            role = PLAYER_ROLES.MR_WHITE;
+            word = null;
+        } else if (roleIndex < undercoverCount + (mrWhiteEnabled ? 1 : 0)) {
+            role = PLAYER_ROLES.UNDERCOVER;
+            word = undercoverWord;
+        }
+
+        console.log('👤', player.name, '→', role, '→', word || 'Mr. White');
+
+        // Oppdater i database
+        await this.supabase
+            .from('players')
+            .update({
+                role: role,
+                word: word,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', player.id);
+
+        roleIndex++;
+    }
+
+    console.log('✅ Roller tildelt!');
+}
+
+async loadMultiplayerGame() {
     try {
-        // Hent spillere fra database
-        const { data: playersList, error } = await supabase
+        console.log("Laster spill")
+        this.updateConnectionStatus('Laster spill...', CONNECTION_STATUS.CONNECTING);
+        
+        // Hent oppdatert spillerinformasjon med roller
+        const { data: updatedPlayer, error: playerError } = await this.supabase
             .from('players')
             .select('*')
-            .eq('game_id', currentGame.id)
+            .eq('id', this.currentPlayer.id)
+            .single();
+
+        if (playerError) throw playerError;
+
+        // Oppdater currentPlayer med rolle
+        this.currentPlayer = updatedPlayer;
+        
+        console.log('🎭 Min rolle:', this.currentPlayer.role, '| Ord:', this.currentPlayer.word);
+        
+        // Vis rolle til spilleren
+        this.showPlayerRole();
+        
+        this.updateConnectionStatus('Spiller', CONNECTION_STATUS.CONNECTED);
+
+    } catch (error) {
+        console.error('Feil ved lasting av spill:', error);
+        this.gameManager.showNotification('❌ Feil ved lasting av spill. Prøv å laste siden på nytt.', NOTIFICATION_TYPES.ERROR);
+    }
+}
+
+showPlayerRole() {
+    console.log('🎭 Viser rolle til spiller:', this.currentPlayer.role, this.currentPlayer.word);
+    
+    // Gå til spillsiden
+    this.gameManager.showPage('game-page');
+    
+    // Vis rolle-seksjonen
+    this.gameManager.showGameSection('word-reveal');
+    
+    // Oppdater UI basert på rolle
+    const wordDisplay = document.getElementById('word-display');
+    const roleInfo = document.getElementById('role-info');
+    
+    if (wordDisplay && roleInfo) {
+        if (this.currentPlayer.role === PLAYER_ROLES.MR_WHITE) {
+            wordDisplay.innerHTML = `
+                <div class="word-card mr-white">
+                    <h2>🕵️ Du er Mr. White!</h2>
+                    <p class="role-description">Du vet ikke ordet, men må gjette deg frem basert på andres beskrivelser.</p>
+                    <p class="role-tip">💡 Tips: Hør nøye etter og prøv å ikke avsløre at du ikke vet ordet!</p>
+                </div>
+            `;
+            roleInfo.textContent = 'Mr. White - Gjett ordet!';
+        } else if (this.currentPlayer.role === PLAYER_ROLES.UNDERCOVER) {
+            wordDisplay.innerHTML = `
+                <div class="word-card undercover">
+                    <h2>🕵️ Du er Undercover!</h2>
+                    <div class="word-text">${this.currentPlayer.word}</div>
+                    <p class="role-description">Du har et annet ord enn de fleste andre. Prøv å ikke avsløre deg selv!</p>
+                    <p class="role-tip">💡 Tips: Vær forsiktig med beskrivelsene dine!</p>
+                </div>
+            `;
+            roleInfo.textContent = `Undercover - ${this.currentPlayer.word}`;
+        } else {
+            wordDisplay.innerHTML = `
+                <div class="word-card normal">
+                    <h2>👥 Du er Normal spiller</h2>
+                    <div class="word-text">${this.currentPlayer.word}</div>
+                    <p class="role-description">Du har det normale ordet. Prøv å finne Undercover og Mr. White!</p>
+                    <p class="role-tip">💡 Tips: Gi beskrivelser som avslører de falske spillerne!</p>
+                </div>
+            `;
+            roleInfo.textContent = `Normal - ${this.currentPlayer.word}`;
+        }
+    }
+    
+    // Vis fortsett-knapp
+    const continueBtn = document.getElementById('continue-btn');
+    if (continueBtn) {
+        continueBtn.style.display = 'block';
+        continueBtn.onclick = () => {
+            this.startMultiplayerDiscussion();
+        };
+        continueBtn.textContent = 'Forstått - Start diskusjon';
+    }
+    
+    // Vis notifikasjon
+    this.gameManager.showNotification('🎭 Din rolle er tildelt! Se skjermen.', NOTIFICATION_TYPES.SUCCESS);
+}
+
+startMultiplayerDiscussion() {
+    console.log('💬 Starter multiplayer diskusjon');
+    
+    // Gå til diskusjonsseksjonen
+    this.gameManager.showGameSection('discussion');
+    
+    // Hent alle spillere for å vise i diskusjonen
+    this.refreshPlayersList();
+    
+    // Vis diskusjons-UI
+    const discussionContent = document.getElementById('discussion-content');
+    if (discussionContent) {
+        discussionContent.innerHTML = `
+            <div class="discussion-info">
+                <h3>💬 Diskusjonsfase</h3>
+                <p>Alle spillere beskriver sitt ord uten å nevne det direkte.</p>
+                <p><strong>Din rolle:</strong> ${this.getRoleDisplayName()}</p>
+                ${this.currentPlayer.word ? `<p><strong>Ditt ord:</strong> ${this.currentPlayer.word}</p>` : '<p><strong>Du må gjette ordet!</strong></p>'}
+            </div>
+            
+            <div class="players-discussion">
+                <h4>👥 Spillere i diskusjon:</h4>
+                <div id="discussion-players">Laster spillere...</div>
+            </div>
+            
+            <div class="discussion-controls">
+                <button class="game-btn primary" onclick="multiplayerManager.readyForVoting()">
+                    Klar for avstemming
+                </button>
+                <button class="game-btn secondary" onclick="multiplayerManager.leaveGame()">
+                    Forlat spill
+                </button>
+            </div>
+        `;
+    }
+    
+    this.updateDiscussionPlayersList();
+}
+
+getRoleDisplayName() {
+    switch (this.currentPlayer.role) {
+        case PLAYER_ROLES.MR_WHITE:
+            return '🕵️ Mr. White';
+        case PLAYER_ROLES.UNDERCOVER:
+            return '🕵️ Undercover';
+        default:
+            return '👥 Normal spiller';
+    }
+}
+
+async updateDiscussionPlayersList() {
+    try {
+        const { data: playersList, error } = await this.supabase
+            .from('players')
+            .select('name, is_host')
+            .eq('game_id', this.currentGame.id)
             .order('joined_at');
 
         if (error) throw error;
 
-        // Konverter til det formatet den eksisterende koden forventer
-        players = playersList.map(p => p.name);
-        
-        // Hvis dette er host, tildel roller og ord
-        if (currentPlayer.is_host) {
-            await assignMultiplayerRoles(playersList);
+        const playersElement = document.getElementById('discussion-players');
+        if (playersElement && playersList) {
+            playersElement.innerHTML = playersList.map(player => `
+                <div class="discussion-player">
+                    <span class="player-name">${player.name}</span>
+                    ${player.is_host ? '<span class="host-badge">👑</span>' : ''}
+                </div>
+            `).join('');
         }
-
-        // Start spillogikken fra eksisterende kode
-        gameState = 'revealing';
-        currentPlayerIndex = 0;
-        eliminatedPlayers = [];
-
-        showPage('game');
-        showGameSection('word-reveal');
-        
-        // Vent på at rollene er tildelt før vi viser ord
-        setTimeout(async () => {
-            await loadPlayerWords();
-            showCurrentPlayerWord();
-        }, 1000);
 
     } catch (error) {
-        console.error('Feil ved lasting av spill:', error);
+        console.error('Feil ved henting av spillere for diskusjon:', error);
     }
 }
 
-// Tildel roller for multiplayer
-async function assignMultiplayerRoles(playersList) {
-    if (!currentPlayer.is_host) return;
-
-    // Bruk eksisterende logikk
-    const wordPair = wordPairs[Math.floor(Math.random() * wordPairs.length)];
-    const normalWord = wordPair.normal;
-    const undercoverWord = wordPair.undercover;
-
-    const undercoverCount = parseInt(document.getElementById('undercover-count-setting')?.value) || 1;
-    const mrWhiteEnabled = document.getElementById('enable-mr-white')?.checked || false;
-
-    const shuffledPlayers = [...playersList].sort(() => Math.random() - 0.5);
-    let playerIndex = 0;
-
-    // Tildel roller
-    for (const player of shuffledPlayers) {
-        let role = 'normal';
-        let word = normalWord;
-
-        if (mrWhiteEnabled && playerIndex === 0) {
-            role = 'mr-white';
-            word = null;
-        } else if (playerIndex < undercoverCount + (mrWhiteEnabled ? 1 : 0)) {
-            role = 'undercover';
-            word = undercoverWord;
-        }
-
-        // Oppdater i database
-        await supabase
-            .from('players')
-            .update({
-                role: role,
-                word: word
-            })
-            .eq('id', player.id);
-
-        playerIndex++;
-    }
+readyForVoting() {
+    this.gameManager.showNotification('🗳️ Markert som klar for avstemming!', NOTIFICATION_TYPES.INFO);
+    
+    // Her kan du implementere logikk for å markere spilleren som klar
+    // og eventuelt starte avstemming når alle er klare
+    
+    // For nå, gå direkte til avstemming
+    this.startVoting();
 }
 
-// Last spillerord fra database
-async function loadPlayerWords() {
+startVoting() {
+    console.log('🗳️ Starter avstemming');
+    
+    this.gameManager.showGameSection('voting');
+    
+    // Implementer avstemmings-UI her
+    const votingContent = document.getElementById('voting-content');
+    if (votingContent) {
+        votingContent.innerHTML = `
+            <div class="voting-info">
+                <h3>🗳️ Avstemmingsfase</h3>
+                <p>Stem på hvem du tror er Undercover eller Mr. White!</p>
+            </div>
+            
+            <div class="voting-players">
+                <h4>Velg hvem du vil stemme på:</h4>
+                <div id="voting-player-list">Laster spillere...</div>
+            </div>
+            
+            <div class="voting-controls">
+                <button class="game-btn secondary" onclick="multiplayerManager.leaveGame()">
+                    Forlat spill
+                </button>
+            </div>
+        `;
+    }
+    
+    this.updateVotingPlayersList();
+}
+
+async updateVotingPlayersList() {
     try {
-        const { data: playersList, error } = await supabase
+        const { data: playersList, error } = await this.supabase
             .from('players')
-            .select('*')
-            .eq('game_id', currentGame.id);
+            .select('name, id')
+            .eq('game_id', this.currentGame.id)
+            .order('joined_at');
 
         if (error) throw error;
 
-        // Konverter til eksisterende format
-        words = [];
-        roles = {};
-
-        playersList.forEach(player => {
-            roles[player.name] = player.role;
-            words.push({
-                player: player.name,
-                word: player.word,
-                role: player.role
-            });
-        });
+        const votingElement = document.getElementById('voting-player-list');
+        if (votingElement && playersList) {
+            votingElement.innerHTML = playersList
+                .filter(player => player.id !== this.currentPlayer.id) // Kan ikke stemme på seg selv
+                .map(player => `
+                    <button class="voting-option game-btn secondary" onclick="multiplayerManager.voteForPlayer('${player.id}', '${player.name}')">
+                        🗳️ Stem på ${player.name}
+                    </button>
+                `).join('');
+        }
 
     } catch (error) {
-        console.error('Feil ved lasting av ord:', error);
+        console.error('Feil ved henting av spillere for avstemming:', error);
     }
 }
 
-// Forlat spill
-async function leaveGame() {
-    try {
-        // Fjern subscriptions
-        if (gameSubscription) {
-            gameSubscription.unsubscribe();
-            gameSubscription = null;
+voteForPlayer(playerId, playerName) {
+    console.log('🗳️ Stemmer på:', playerName);
+    this.gameManager.showNotification(`🗳️ Du stemte på ${playerName}!`, NOTIFICATION_TYPES.SUCCESS);
+    
+    // Her kan du implementere logikk for å lagre stemmen i databasen
+    // og håndtere avstemmingsresultatet
+    
+    // For nå, bare vis bekreftelse
+    const votingControls = document.querySelector('.voting-controls');
+    if (votingControls) {
+        votingControls.innerHTML = `
+            <div class="vote-confirmation">
+                <p>✅ Du stemte på <strong>${playerName}</strong></p>
+                <p>⏳ Venter på at andre spillere stemmer...</p>
+            </div>
+            <button class="game-btn secondary" onclick="multiplayerManager.leaveGame()">
+                Forlat spill
+            </button>
+        `;
+    }
+}
+
+    async leaveGame() {
+        const confirmLeave = confirm('Er du sikker på at du vil forlate spillet?');
+        if (!confirmLeave) return;
+
+        try {
+            this.updateConnectionStatus('Forlater spill...', CONNECTION_STATUS.CONNECTING);
+            
+            // Lagre player info før vi sletter
+            const playerName = this.currentPlayer?.name;
+            const playerId = this.currentPlayer?.id;
+            const wasHost = this.currentPlayer?.is_host;
+            
+            console.log('🚪 Forlater spill...', {
+                playerName,
+                playerId,
+                wasHost,
+                gameId: this.currentGame?.id
+            });
+
+            // Stopp polling og subscriptions FØRST
+            this.stopPolling();
+            
+            if (this.gameSubscription) {
+                await this.gameSubscription.unsubscribe();
+                this.gameSubscription = null;
+                console.log('✅ Game subscription stoppet');
+            }
+            if (this.playersSubscription) {
+                await this.playersSubscription.unsubscribe();
+                this.playersSubscription = null;
+                console.log('✅ Players subscription stoppet');
+            }
+
+            // Forsøk å slette spiller fra database
+            if (this.currentPlayer && this.currentPlayer.id) {
+                console.log('🗑️ Sletter spiller fra database...', this.currentPlayer.id);
+                
+                const { data: deletedData, error: deleteError } = await this.supabase
+                    .from('players')
+                    .delete()
+                    .eq('id', this.currentPlayer.id)
+                    .select(); // Legg til select for å se hva som ble slettet
+                
+                if (deleteError) {
+                    console.error('❌ Feil ved sletting av spiller:', deleteError);
+                    throw deleteError;
+                } else {
+                    console.log('✅ Spiller slettet fra database:', deletedData);
+                }
+
+                // Verifiser at spilleren er borte
+                const { data: verifyData, error: verifyError } = await this.supabase
+                    .from('players')
+                    .select('*')
+                    .eq('id', this.currentPlayer.id);
+                
+                if (verifyError) {
+                    console.warn('Kunne ikke verifisere sletting:', verifyError);
+                } else if (verifyData && verifyData.length === 0) {
+                    console.log('✅ Verifisert: Spiller er fjernet fra database');
+                } else {
+                    console.warn('⚠️ Spiller ser ut til å fortsatt være i database:', verifyData);
+                }
+            } else {
+                console.warn('⚠️ Ingen currentPlayer.id å slette');
+            }
+
+            // Hvis jeg var host og det var andre spillere, prøv å overføre host
+            if (wasHost && this.onlinePlayers.length > 1) {
+                console.log('👑 Overfører host før avgang...');
+                await this.transferHostBeforeLeaving();
+            }
+
+            // Reset variabler
+            this.currentGame = null;
+            this.currentPlayer = null;
+            this.onlinePlayers = [];
+            this.gameManager.isMultiplayerMode = false;
+            this.gameManager.gameMode = null;
+
+            // Gå tilbake til hovedmeny
+            this.gameManager.showPage('main-menu');
+            this.updateConnectionStatus('Tilkoblet', CONNECTION_STATUS.CONNECTED);
+            
+            this.gameManager.showNotification('👋 Du forlot spillet', NOTIFICATION_TYPES.INFO);
+
+        } catch (error) {
+            console.error('❌ Feil ved forlating av spill:', error);
+            
+            // Vis detaljert feilmelding
+            this.gameManager.showNotification(`❌ Feil ved forlating: ${error.message}`, NOTIFICATION_TYPES.ERROR);
+            
+            // Gå tilbake til hovedmeny uansett
+            this.gameManager.showPage('main-menu');
+            this.updateConnectionStatus('Feil ved frakobling', CONNECTION_STATUS.ERROR);
         }
-        if (playersSubscription) {
-            playersSubscription.unsubscribe();
-            playersSubscription = null;
+    }
+
+    async transferHostBeforeLeaving() {
+        try {
+            // Finn andre spillere
+            const { data: otherPlayers, error } = await this.supabase
+                .from('players')
+                .select('*')
+                .eq('game_id', this.currentGame.id)
+                .neq('id', this.currentPlayer.id)
+                .order('joined_at')
+                .limit(1);
+
+            if (error || !otherPlayers || otherPlayers.length === 0) {
+                return;
+            }
+
+            // Gjør den første andre spilleren til host
+            const newHost = otherPlayers[0];
+            await this.supabase
+                .from('players')
+                .update({ is_host: true })
+                .eq('id', newHost.id);
+
+            console.log('👑 Overførte host til:', newHost.name);
+            
+        } catch (error) {
+            console.error('Feil ved host-overføring:', error);
+        }
+    }
+
+    // Placeholder-funksjoner for synkronisering
+    syncDiscussion() {
+        console.log('🗣️ Synkroniserer diskusjon...');
+        // Her kan du legge til synkronisering av timer, etc.
+        this.gameManager.startDiscussion();
+    }
+
+    syncVoting() {
+        console.log('🗳️ Synkroniserer avstemming...');
+        // Her kan du legge til synkronisering av stemmer
+        this.gameManager.startVoting();
+    }
+
+    // Kopier spillkode til utklippstavlen
+    copyGameCode() {
+        const gameCode = this.currentGame?.code;
+        if (!gameCode) return;
+
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(gameCode).then(() => {
+                this.gameManager.showNotification('📋 Spillkode kopiert!', NOTIFICATION_TYPES.SUCCESS);
+            }).catch(() => {
+                this.fallbackCopyGameCode(gameCode);
+            });
+        } else {
+            this.fallbackCopyGameCode(gameCode);
+        }
+    }
+
+    fallbackCopyGameCode(gameCode) {
+        // Fallback for eldre nettlesere
+        const textArea = document.createElement('textarea');
+        textArea.value = gameCode;
+        document.body.appendChild(textArea);
+        textArea.select();
+        
+        try {
+            document.execCommand('copy');
+            this.gameManager.showNotification('📋 Spillkode kopiert!', NOTIFICATION_TYPES.SUCCESS);
+        } catch (err) {
+            this.gameManager.showNotification('❌ Kunne ikke kopiere spillkode', NOTIFICATION_TYPES.ERROR);
+        }
+        
+        document.body.removeChild(textArea);
+    }
+
+    // Debug-funksjon
+    debug() {
+        console.log('🐛 Multiplayer Debug:');
+        console.log('Supabase:', this.supabase ? '✅' : '❌');
+        console.log('Current Game:', this.currentGame);
+        console.log('Current Player:', this.currentPlayer);
+        console.log('Online Players:', this.onlinePlayers);
+        console.log('Game Manager Multiplayer Mode:', this.gameManager.isMultiplayerMode);
+        console.log('Game Subscription:', this.gameSubscription ? '✅ Aktiv' : '❌ Ikke aktiv');
+        console.log('Players Subscription:', this.playersSubscription ? '✅ Aktiv' : '❌ Ikke aktiv');
+        console.log('Polling Intervals:', {
+            normal: this.pollingInterval ? '✅ Aktiv' : '❌ Ikke aktiv',
+            fast: this.fastPollingInterval ? '✅ Aktiv' : '❌ Ikke aktiv'
+        });
+        
+        // Test polling manuelt
+        console.log('🧪 Tester manuell spillersjekk...');
+        this.checkForPlayerChanges();
+    }
+
+    // Manuell test-funksjon
+    async testConnection() {
+        console.log('🧪 Tester Supabase tilkobling...');
+        try {
+            const { data, error } = await this.supabase
+                .from('players')
+                .select('*')
+                .eq('game_id', this.currentGame?.id || 'test');
+                
+            console.log('✅ Tilkobling OK, data:', data);
+            return true;
+        } catch (error) {
+            console.error('❌ Tilkoblingsfeil:', error);
+            return false;
+        }
+    }
+
+    // Test database operasjoner
+    async testDatabaseOperations() {
+        if (!this.currentGame) {
+            console.log('❌ Ingen aktivt spill å teste med');
+            return;
         }
 
-        // Slett spiller fra database
-        if (currentPlayer) {
-            await supabase
+        console.log('🧪 Tester database operasjoner...');
+        
+        try {
+            // Test SELECT
+            console.log('📖 Tester SELECT...');
+            const { data: selectData, error: selectError } = await this.supabase
+                .from('players')
+                .select('*')
+                .eq('game_id', this.currentGame.id);
+            
+            if (selectError) {
+                console.error('❌ SELECT feil:', selectError);
+            } else {
+                console.log('✅ SELECT OK, spillere:', selectData);
+            }
+
+            // Test om vi har rettigheter til å slette
+            console.log('🗑️ Tester DELETE rettigheter...');
+            const { data: deleteTest, error: deleteError } = await this.supabase
                 .from('players')
                 .delete()
-                .eq('id', currentPlayer.id);
+                .eq('id', 'test-id-som-ikke-eksisterer')
+                .select();
+            
+            if (deleteError) {
+                console.error('❌ DELETE test feil:', deleteError);
+                if (deleteError.code === '42501') {
+                    console.error('🚫 Mangler DELETE rettigheter i databasen!');
+                }
+            } else {
+                console.log('✅ DELETE rettigheter OK');
+            }
+
+            // Test INSERT for å verifisere tilkoblingsrettigheter
+            console.log('📝 Tester INSERT rettigheter...');
+            const testPlayer = {
+                game_id: this.currentGame.id,
+                name: 'TEST_DELETE_ME',
+                is_host: false,
+                joined_at: new Date().toISOString()
+            };
+
+            const { data: insertData, error: insertError } = await this.supabase
+                .from('players')
+                .insert([testPlayer])
+                .select();
+
+            if (insertError) {
+                console.error('❌ INSERT test feil:', insertError);
+            } else {
+                console.log('✅ INSERT OK, test spiller opprettet:', insertData);
+                
+                // Prøv å slette test spilleren
+                if (insertData && insertData.length > 0) {
+                    const testPlayerId = insertData[0].id;
+                    console.log('🗑️ Sletter test spiller...', testPlayerId);
+                    
+                    const { data: cleanupData, error: cleanupError } = await this.supabase
+                        .from('players')
+                        .delete()
+                        .eq('id', testPlayerId)
+                        .select();
+                    
+                    if (cleanupError) {
+                        console.error('❌ Kunne ikke slette test spiller:', cleanupError);
+                    } else {
+                        console.log('✅ Test spiller slettet:', cleanupData);
+                    }
+                }
+            }
+
+        } catch (error) {
+            console.error('❌ Database test feil:', error);
+        }
+    }
+
+    // Sjekk alle spillere i databasen for debugging
+    async showAllPlayersInGame() {
+        if (!this.currentGame) {
+            console.log('❌ Ingen aktivt spill');
+            return;
         }
 
-        // Reset variabler
-        currentGame = null;
-        currentPlayer = null;
-        onlinePlayers = [];
+        try {
+            const { data, error } = await this.supabase
+                .from('players')
+                .select('*')
+                .eq('game_id', this.currentGame.id)
+                .order('joined_at');
 
-        // Fjern lobby-siden
-        const lobbyPage = document.getElementById('lobby-page');
-        if (lobbyPage) {
-            lobbyPage.remove();
+            if (error) {
+                console.error('❌ Feil ved henting av spillere:', error);
+            } else {
+                console.log('📊 Alle spillere i spill', this.currentGame.code + ':');
+                console.table(data);
+                
+                console.log('🆔 Player IDs:', data.map(p => ({ name: p.name, id: p.id })));
+            }
+        } catch (error) {
+            console.error('❌ Database feil:', error);
         }
-
-        // Gå tilbake til hovedmeny
-        showPage('main-menu');
-
-    } catch (error) {
-        console.error('Feil ved forlating av spill:', error);
-        showPage('main-menu'); // Gå tilbake uansett
     }
 }
 
-// Hent spillinnstillinger (tilpasset dine felt)
-function getGameSettings() {
-    return {
-        timerDuration: parseInt(document.getElementById('timer-duration')?.value || 300),
-        enableMrWhite: document.getElementById('enable-mr-white')?.checked || true,
-        undercoverCount: parseInt(document.getElementById('undercover-count-setting')?.value || 1),
-        specialRoles: {
-            lovers: document.getElementById('enable-lovers')?.checked || false,
-            revenger: document.getElementById('enable-revenger')?.checked || false,
-            ghost: document.getElementById('enable-ghost')?.checked || false,
-            goddess: document.getElementById('enable-goddess')?.checked || false,
-            doublevoter: document.getElementById('enable-doublevoter')?.checked || false,
-            distractor: document.getElementById('enable-distractor')?.checked || false,
-            secretally: document.getElementById('enable-secretally')?.checked || false,
-            mime: document.getElementById('enable-mime')?.checked || false,
-            justice: document.getElementById('enable-justice')?.checked || false,
-            liampower: document.getElementById('enable-liampower')?.checked || false
-        }
-    };
-}
+// Initialiser multiplayer manager
+window.multiplayerManager = null;
 
-// Legg til multiplayer-knapper i hovedmenyen
-function addMultiplayerButtons() {
-    const menuButtons = document.querySelector('.menu-buttons');
-    if (!menuButtons) return;
-    
-    // Sjekk om multiplayer-seksjonen allerede eksisterer
-    if (document.querySelector('.multiplayer-section')) return;
-    
-    // Legg til multiplayer-seksjon
-    const multiplayerSection = document.createElement('div');
-    multiplayerSection.className = 'multiplayer-section';
-    multiplayerSection.innerHTML = `
-        <h3>🌐 Multiplayer</h3>
-        <button class="menu-btn primary" onclick="hostGame()">
-            <span class="btn-icon">🏠</span>
-            Host Game
-        </button>
-        <button class="menu-btn" onclick="joinGame()">
-            <span class="btn-icon">🔗</span>
-            Join Game
-        </button>
-    `;
-    
-    // Sett inn før eksisterende "Start Nytt Spill" knapp
-    const firstButton = menuButtons.querySelector('.menu-btn');
-    if (firstButton) {
-        menuButtons.insertBefore(multiplayerSection, firstButton);
+// Initialiser når siden er lastet
+document.addEventListener('DOMContentLoaded', function() {
+    // Vent litt til gameManager er initialisert
+    setTimeout(() => {
+        if (window.gameManager) {
+            window.multiplayerManager = new MultiplayerManager(window.gameManager);
+        }
+    }, 100);
+});
+
+// === GLOBALE MULTIPLAYER FUNKSJONER ===
+
+function hostGame() {
+    if (window.multiplayerManager) {
+        window.multiplayerManager.hostGame();
     } else {
-        menuButtons.appendChild(multiplayerSection);
+        gameManager.showNotification('❌ Multiplayer ikke initialisert ennå. Prøv igjen.', NOTIFICATION_TYPES.ERROR);
     }
 }
 
-// Synkronisering for diskusjon og avstemming (grunnleggende)
-function syncDiscussion() {
-    // Her kan du legge til synkronisering av timer, etc.
-    console.log('Synkroniserer diskusjon...');
+function joinGame() {
+    if (window.multiplayerManager) {
+        window.multiplayerManager.joinGame();
+    } else {
+        gameManager.showNotification('❌ Multiplayer ikke initialisert ennå. Prøv igjen.', NOTIFICATION_TYPES.ERROR);
+    }
 }
 
-function syncVoting() {
-    // Her kan du legge til synkronisering av stemmer
-    console.log('Synkroniserer avstemming...');
+function copyGameCode() {
+    if (window.multiplayerManager) {
+        window.multiplayerManager.copyGameCode();
+    }
 }
+
+// Debug-funksjon for utvikling
+window.debugMultiplayer = function() {
+    if (window.multiplayerManager) {
+        window.multiplayerManager.debug();
+    }
+};
+
+// Test-funksjoner for debugging
+window.testMultiplayerConnection = function() {
+    if (window.multiplayerManager) {
+        return window.multiplayerManager.testConnection();
+    }
+};
+
+window.forcePlayerRefresh = function() {
+    if (window.multiplayerManager) {
+        console.log('🔄 Tvinger spillerliste-oppdatering...');
+        window.multiplayerManager.refreshPlayersList(true);
+        window.multiplayerManager.checkForPlayerChanges();
+    }
+};
+
+window.simulatePlayerLeft = function(playerName = 'TestSpiller') {
+    if (window.multiplayerManager) {
+        console.log('🧪 Simulerer at spiller forlot:', playerName);
+        window.multiplayerManager.showPlayerLeftNotification(playerName);
+    }
+};
+
+// Auto-diagnostikk hvis problemer
+window.addEventListener('load', () => {
+    setTimeout(() => {
+        if (window.multiplayerManager && window.multiplayerManager.currentGame) {
+            console.log('🔍 Auto-diagnostikk kjører om 10 sekunder...');
+            setTimeout(() => {
+                console.log('📊 Multiplayer status:');
+                window.debugMultiplayer();
+            }, 10000);
+        }
+    }, 5000);
+});
+
+
