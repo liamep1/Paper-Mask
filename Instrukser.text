@@ -1,0 +1,6 @@
+
+Husk at du må være på dette nivået: liamphillips@Liam-sin-MacBook-Pro LIAM GAME % 
+
+npx cap add android     (Bygger)  Trenger ikke                                         
+npx cap sync           (Syncer til android studio)
+npx cap open android     

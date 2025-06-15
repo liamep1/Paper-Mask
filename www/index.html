@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camelion - Hovedmeny</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
+    <script src="kode.js" defer></script>
+    <script src="multiplayer.js" defer></script>
+</head>
+<body>
+    <!-- index.html - Hovedmeny -->
+    <div class="container" id="main-menu">
+        <div class="header">
+            <h1 class="title">🎭 UNDERCOVER 🎭</h1>
+            <p class="subtitle">Det ultimate festspillet</p>
+        </div>
+        
+        <div class="menu-buttons">
+            <button class="menu-btn primary" onclick="showPage('game')">
+                <span class="btn-icon">🎮</span>
+                Start Nytt Spill!
+            </button>
+            <button class="menu-btn" onclick="showPage('settings')">
+                <span class="btn-icon">⚙️</span>
+                Innstillinger
+            </button>
+            <button class="menu-btn" onclick="showPage('rules')">
+                <span class="btn-icon">📖</span>
+                Regler
+            </button>
+            <div class="game-controls">
+                <button class="game-btn secondary" onclick="showDeveloperOverlay()">ℹ️ Om utvikleren</button>
+            </div>
+            
+        </div>
+        
+
+    </div>
+
+    <!-- game.html - Selve spillet -->
+    <div class="container hidden" id="game-page">
+        <!-- Spillerinnstillinger -->
+        <div class="game-section" id="player-setup">
+            <div class="header">
+                <h2>👥 Legg til spillere</h2>
+                <p>Minimum 3 spillere kreves</p>
+            </div>
+            
+            <div class="player-input-section">
+                <div class="input-group">
+                    <input type="text" id="player-name" placeholder="Skriv spillernavn..." maxlength="20">
+                    <button class="add-btn" onclick="addPlayer()">➕</button>
+                </div>
+            </div>
+            
+            <div class="players-list" id="players-list"></div>
+            
+            <div class="game-controls">
+                <button class="game-btn secondary" onclick="showPage('main-menu')">Tilbake</button>
+                <button class="game-btn primary" id="start-game-btn" onclick="startGame()" disabled>Start Spill</button>
+            </div>
+        </div>
+
+        <!-- Ordvisning -->
+        <div class="game-section hidden" id="word-reveal">
+            <div class="header">
+                <h2>🎯 Ditt ord</h2>
+                <p id="current-player-name">Spiller</p>
+            </div>
+            
+            <div class="word-display">
+                <div class="word-card" id="word-card">
+                    <div class="word-text" id="word-text">Klikk for å se ditt ord</div>
+                    <div class="role-indicator" id="role-indicator"></div>
+                </div>
+            </div>
+            
+            <div class="game-controls">
+                <button class="game-btn primary" id="next-player-btn" onclick="nextPlayer()">Neste spiller</button>
+            </div>
+        </div>
+
+        <!-- Diskusjon -->
+        <div class="game-section hidden" id="discussion">
+            <div class="header">
+                <h2>🗣️ Diskusjon</h2>
+                <p>Diskuter ordene deres - hvem er undercover?</p>
+            </div>
+            
+            <div class="timer-display">
+                <div class="timer" id="timer">05:00</div>
+                <button class="timer-btn" id="timer-toggle" onclick="toggleTimer()">⏸️</button>
+            </div>
+            
+            <div class="player-order">
+                <h3>🎲 Rekkefølge for å si ord:</h3>
+                <div class="order-list" id="order-list"></div>
+            </div>
+            
+            <div class="game-controls">
+                <button class="game-btn primary" onclick="startVoting()">Start Avstemming</button>
+            </div>
+        </div>
+
+        <!-- Avstemming -->
+        <div class="game-section hidden" id="voting">
+            <div class="header">
+                <h2>🗳️ Avstemming</h2>
+                <p>Hvem tror du er undercover?</p>
+            </div>
+            
+            <div class="voting-cards" id="voting-cards"></div>
+            
+            <div class="game-controls">
+                <button class="game-btn primary" id="finish-vote-btn" onclick="finishVoting()" disabled>Fullfør Avstemming</button>
+            </div>
+        </div>
+
+        <!-- Resultater -->
+        <div class="game-section hidden" id="results">
+            <div class="header">
+                <h2>📊 Resultat</h2>
+            </div>
+            
+            <div class="result-display" id="result-display"></div>
+            
+            <div class="game-controls">
+                <button class="game-btn secondary" onclick="continueGame()">Fortsett Spill</button>
+                <button class="game-btn primary" onclick="endGame()">Avslutt Spill</button>
+            </div>
+        </div>
+
+        <!-- Spesialrolle overlay -->
+        <div class="overlay hidden" id="role-overlay">
+            <div class="role-popup">
+                <h3 id="role-title">Spesialrolle</h3>
+                <p id="role-description">Beskrivelse</p>
+                <button class="game-btn primary" onclick="closeRoleOverlay()">Forstått</button>
+            </div>
+        </div>
+
+        <!-- Ghost hint overlay -->
+        <div class="overlay hidden" id="ghost-overlay">
+            <div class="ghost-popup">
+                <h3>👻 Ånd - Gi hint</h3>
+                <input type="text" id="ghost-hint" placeholder="Skriv ditt hint...">
+                <div class="game-controls">
+                    <button class="game-btn secondary" onclick="closeGhostOverlay()">Avbryt</button>
+                    <button class="game-btn primary" onclick="sendGhostHint()">Send Hint</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- settings.html - Innstillinger -->
+    <div class="container hidden" id="settings-page">
+        <div class="header">
+            <h2>⚙️ Innstillinger</h2>
+            <p>Tilpass spillet ditt</p>
+        </div>
+        
+        <div class="settings-section">
+            <h3>⏱️ Timer</h3>
+        
+            <div class="timer-setting">
+                <label for="timer-duration" class="timer-label">Diskusjonstid:</label>
+                <select id="timer-duration" class="timer-select">
+                    <option value="300">5 minutter</option>
+                    <option value="480">8 minutter</option>
+                    <option value="600">10 minutter</option>
+                    <option value="900">15 minutter</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h3>🎯 Spillmodus & Undercover</h3>
+            
+            <div class="settings-row">
+                <!-- Mr. White setting -->
+                <div class="settings-column">
+                    <label class="mode-setting">
+                        <input type="checkbox" id="enable-mr-white" checked>
+                        <div class="mode-content">
+                            <div class="mode-title">⚪ Inkluder Mr. White</div>
+                            <p class="mode-desc">Mr. White vet ikke ordet og må prøve å gjette det.</p>
+                        </div>
+                    </label>
+                </div>
+                
+                <!-- Undercover count -->
+                <div class="settings-column">
+                    <div class="undercover-setting">
+                        <label for="undercover-count-setting" class="undercover-label">Antall Undercover:</label>
+                        <select id="undercover-count-setting" class="undercover-select">
+                            <option value="1">1</option>
+                            <option value="2" selected>1</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="settings-section">
+            <h3>🎭 Spesialroller</h3>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-lovers">
+                <div class="role-content">
+                    <div class="role-title">💕 <strong>The Lovers</strong></div>
+                    <p class="role-desc">To spillere er hemmelig forelsket. Hvis én elimineres, dør den andre automatisk.</p>
+                </div>
+            </label>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-revenger">
+                <div class="role-content">
+                    <div class="role-title">⚔️ <strong>The Revenger</strong></div>
+                    <p class="role-desc">Om stemt ut, kan velge én annen spiller som også dør med ham/henne.</p>
+                </div>
+            </label>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-ghost">
+                <div class="role-content">
+                    <div class="role-title">👻 <strong>The Ghost</strong></div>
+                    <p class="role-desc">Etter død kan Ghost sende et hint til de gjenværende spillerne én gang.</p>
+                </div>
+            </label>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-goddess">
+                <div class="role-content">
+                    <div class="role-title">⚖️ <strong>Guardian Angel</strong></div>
+                    <p class="role-desc">Kan én gang redde en spiller fra å bli stemt ut.</p>
+                </div>
+            </label>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-doublevoter">
+                <div class="role-content">
+                    <div class="role-title">🎲 <strong>Double Voter</strong></div>
+                    <p class="role-desc">Kan stemme to ganger på samme spiller eller to forskjellige.</p>
+                </div>
+            </label>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-distractor">
+                <div class="role-content">
+                    <div class="role-title">🎭 <strong>Distractor / Jester</strong></div>
+                    <p class="role-desc">Hvis stemt ut vinner Distractor umiddelbart, og resten taper.</p>
+                </div>
+            </label>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-secretally">
+                <div class="role-content">
+                    <div class="role-title">🕵️‍♂️ <strong>Secret Ally</strong></div>
+                    <p class="role-desc">Er en skjult alliert av Mr. White. Jobber for å hjelpe Mr. White vinne.</p>
+                </div>
+            </label>
+        
+            <label class="special-role">
+                <input type="checkbox" id="enable-mime">
+                <div class="role-content">
+                    <div class="role-title">🤐 <strong>Mr. Mime</strong></div>
+                    <p class="role-desc">Kan kun bruke kroppsspråk, har ikke lov til å snakke.</p>
+                </div>
+            </label>
+
+                    
+            <label class="special-role">
+                <input type="checkbox" id="enable-justice">
+                <div class="role-content">
+                    <div class="role-title">👻 <strong>Justice</strong></div>
+                    <p class="role-desc">Du avgjør hvem som blir stemt ut om det blir uavgjort</p>
+                </div>
+            </label>
+        
+            <div class="liam-power-setting">
+                <label>
+                    <input type="checkbox" id="enable-liampower">
+                    💥 LiamPower (custom rolle)
+                </label>
+                <textarea id="liampower-description" placeholder="Skriv hva LiamPower skal gjøre..." rows="3"></textarea>
+            </div>
+        
+        </div>
+
+
+        <div class="game-controls">
+            <button class="game-btn secondary" onclick="showPage('main-menu')">Tilbake</button>
+            <button class="game-btn primary" onclick="saveSettings()">Lagre</button>
+        </div>
+    </div>
+
+    <!-- rules.html - Regler -->
+    <div class="container hidden" id="rules-page">
+        <div class="header">
+            <h2>📖 Regler</h2>
+            <p>Hvordan spille Undercover</p>
+        </div>
+        
+        <div class="rules-content">
+
+            <!-- Grunnregler -->
+            <div class="rule-section">
+                <h3>🎯 Grunnregler!</h3>
+                <p>Undercover er et sosialt partyspill der målet er å identifisere skjulte roller blant spillerne.</p>
+                <p>Ved starten av spillet får hver spiller utdelt et <strong>hemmelig ord</strong>. Undercover-spillerne får et ord som er svært likt, men ikke identisk. Hvis <strong>Mr. White</strong> er aktivert, får denne spilleren <stronginget ord</strong>, og må late som om de kjenner det riktige ordet.</p>
+                <p>Spillerne må deretter gi subtile hint om sitt ord uten å avsløre det direkte. Samtidig må de prøve å oppdage hvem som skjuler en annen rolle.</p>
+            </div>
+        
+            <!-- Spillegang -->
+            <div class="rule-section">
+                <h3>🎮 Spillegang</h3>
+                <ol>
+                    <li><strong>Ordtildeling:</strong> Spillerne får se sitt ord privat én etter én.</li>
+                    <li><strong>Diskusjonsrunde:</strong> I valgt rekkefølge gir spillerne et <em>beskrivende hint</em> om sitt ord. Ingen får si ordet direkte eller bruke synonymer som åpenbart avslører det.</li>
+                    <li><strong>Avstemning:</strong> Etter diskusjonen stemmer alle anonymt på hvem de tror er Undercover eller Mr. White. Den som får flest stemmer elimineres.</li>
+                    <li><strong>Mr. White-spesial:</strong> Hvis Mr. White elimineres, får spilleren en siste sjanse til å <strong>gjette det riktige ordet</strong>. Gjetter de korrekt, vinner Mr. White umiddelbart.</li>
+                    <li><strong>Spillet fortsetter:</strong> Ny diskusjonsrunde startes, og prosessen gjentas til én av sidene oppfyller sin seiersbetingelse.</li>
+                </ol>
+            </div>
+        
+            <!-- Hvordan vinne -->
+            <div class="rule-section">
+                <h3>🏆 Hvordan vinne</h3>
+                <div class="win-conditions">
+        
+                    <div class="win-condition">
+                        <h4>👥 Vanlige spillere</h4>
+                        <p>Eliminer alle Undercover-spillere og Mr. White før de klarer å overleve eller gjette det riktige ordet.</p>
+                    </div>
+        
+                    <div class="win-condition">
+                        <h4>🕵️ Undercover</h4>
+                        <p>Overlev til det kun er like mange (eller færre) vanlige spillere igjen som det er Undercover-spillere igjen i spillet.</p>
+                    </div>
+        
+                    <div class="win-condition">
+                        <h4>⚪ Mr. White</h4>
+                        <p>Blir du stemt ut? Da får du en sjanse til å gjette det riktige ordet. Hvis du lykkes, vinner du spillet umiddelbart.</p>
+                    </div>
+        
+                </div>
+            </div>
+        
+            <!-- Spesialroller -->
+            <div class="rule-section">
+                <h3>🎭 Spesialroller</h3>
+                <p>Spesialroller tilfører strategisk dybde og uforutsigbarhet til spillet:</p>
+        
+                <div class="special-roles">
+        
+                    <div class="role-card">
+                        <h4>💕 The Lovers</h4>
+                        <p>To tilfeldige spillere danner et par. Hvis én av dem elimineres av avstemning eller effekter, dør den andre umiddelbart av sorg. Spillerne kjenner hverandres identitet som Lovers.</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>⚔️ The Revenger</h4>
+                        <p>Hvis du blir stemt ut, kan du umiddelbart velge én annen spiller som også dør sammen med deg. Dette skjer før seiersbetingelser vurderes.</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>👻 The Ghost</h4>
+                        <p>Etter å ha blitt eliminert, kan du sende et skriftlig hint til de gjenlevende spillerne én gang. Hintet må være vagt og i samsvar med rollen din.</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>⚖️ Guardian Angel</h4>
+                        <p>Du kan én gang per spill redde en spiller fra å bli stemt ut. Når avstemningen er ferdig, velger du om du vil bruke Guardian-effekten. Brukes effekten, skjer ingen eliminering i den runden.</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>🎲 Double Voter</h4>
+                        <p>Du har muligheten til å legge to stemmer på én spiller i hver avstemning. Du kan også velge å legge kun én stemme. Stemmegivning skjer på vanlig måte.</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>🎭 Distractor (Jester)</h4>
+                        <p>Din hemmelige oppgave er å få de andre til å stemme deg ut. Dersom du elimineres via avstemning, vinner du spillet umiddelbart — selv om andre betingelser ikke er oppfylt.</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>🕵️‍♂️ Secret Ally</h4>
+                        <p>Du er i hemmelig allianse med Mr. White. Målet ditt er å hjelpe Mr. White med å enten overleve til slutten av spillet eller gjette det riktige ordet. Din identitet som Secret Ally er kun kjent for deg selv.</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>🤐 Mr. Mime</h4>
+                        <p>Du har mistet stemmen og kan <strong>kun bruke kroppsspråk og mimikk</strong> for å gi hint om ordet ditt. All verbal kommunikasjon er forbudt (både snakking og lyder).</p>
+                    </div>
+        
+                    <div class="role-card">
+                        <h4>Justice</h4>
+                        <p>Hvis det blir likt mellom 2 personer velger du hvem som ryker ut</p>
+                    </div>
+
+                    <div class="role-card">
+                        <h4>💥 LiamPower</h4>
+                        <p>${specialRoles.liampower.description || 'Denne rollen er egendefinert. Gå til innstillinger for å skrive hva den skal gjøre.'}</p>
+                    </div>
+                </div>
+            </div>
+        
+        </div>
+
+        <div class="game-controls">
+            <button class="game-btn primary" onclick="showPage('main-menu')">Tilbake til meny</button>
+        </div>
+    </div>
+
+    <!-- seier.html - Seier skjerm -->
+    <div class="container hidden" id="victory-page">
+        <div class="victory-screen">
+            <div class="victory-animation">
+                <div class="confetti"></div>
+                <div class="victory-content">
+                    <h1 class="victory-title" id="victory-title">🎉 SEIER! 🎉</h1>
+                    <div class="victory-icon" id="victory-icon">🏆</div>
+                    <p class="victory-message" id="victory-message">Gratulerer!</p>
+                    <div class="victory-details" id="victory-details"></div>
+                </div>
+            </div>
+            
+            <div class="game-controls">
+                <button class="game-btn primary" onclick="showPage('main-menu')">Ny runde</button>
+                <button class="game-btn secondary" onclick="restartGame()">Samme spillere</button>
+            </div>
+        </div>
+    </div>
+<!-- Developer popup -->
+<div class="overlay hidden" id="developer-overlay">
+    <div class="popup-content">
+        <h3>ℹ️ Om utvikleren</h3>
+        <p>Navn: <strong>Liam Eidsnes Phillips</strong></p>
+        <p>Fødselsdato: <strong>7. april 2008</strong></p>
+        <button class="game-btn primary" onclick="closeDeveloperOverlay()">Lukk</button>
+    </div>
+</div>
+</div>
+    
+
+   
