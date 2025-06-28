@@ -266,10 +266,10 @@ class GameManager {
         } else {
             wordText.textContent = playerWord.word;
             if (playerWord.role === PLAYER_ROLES.UNDERCOVER) {
-                roleIndicator.textContent = 'Du er UNDERCOVER! Ditt ord er annerledes enn de andres.';
+              
                 wordCard.className = 'word-card undercover';
             } else {
-                roleIndicator.textContent = 'Du er en normal spiller.';
+               
                 wordCard.className = 'word-card normal';
             }
         }
